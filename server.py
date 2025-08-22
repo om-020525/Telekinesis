@@ -3,10 +3,14 @@ Flask Server for WebRTC File Transfer Application
 Serves the web interface and handles WebRTC connection management
 """
 
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 import os
 import logging
 import argparse
+import queue
+import time
+import json
+from threading import Lock
 from networking import NetworkingManager
 
 # Configure logging
@@ -16,8 +20,24 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this'
 
+# Global event queue for SSE
+event_queue = queue.Queue()
+event_queue_lock = Lock()
+
 # Global networking manager
 networking_manager = NetworkingManager()
+
+# Connect networking manager to SSE queue
+def sse_callback(event_type, data):
+    event = {
+        'type': event_type, 
+        'data': data, 
+        'timestamp': time.time()
+    }
+    logger.info(f"📤 Queuing SSE event: {event}")
+    event_queue.put(event)
+
+networking_manager.set_event_callback(sse_callback)
 
 @app.route('/')
 def index():
@@ -132,6 +152,38 @@ def get_status():
     except Exception as e:
         logger.error(f"Error in get_status: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/events')
+def event_stream():
+    """Server-Sent Events endpoint for real-time updates"""
+    def generate():
+        try:
+            while True:
+                try:
+                    # Wait for events with timeout
+                    event = event_queue.get(timeout=30)
+                    
+                    # Send event to client
+                    event_data = {
+                        'type': event['type'],
+                        'data': event['data'],
+                        'timestamp': event['timestamp']
+                    }
+                    logger.info(f"📡 Sending SSE event to client: {event_data}")
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                    
+                except queue.Empty:
+                    # Send heartbeat to keep connection alive
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': time.time()})}\n\n"
+                    
+        except GeneratorExit:
+            logger.info("SSE client disconnected")
+    
+    return Response(generate(), 
+                   mimetype='text/event-stream',
+                   headers={'Cache-Control': 'no-cache',
+                           'Connection': 'keep-alive',
+                           'Access-Control-Allow-Origin': '*'})
 
 # Static file serving
 @app.route('/static/<path:filename>')

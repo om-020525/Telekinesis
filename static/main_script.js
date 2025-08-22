@@ -7,12 +7,12 @@ class TelekinesisApp {
     constructor() {
         this.isInitiator = false;
         this.connectionState = 'disconnected';
-        this.pollingInterval = null;
+        this.eventSource = null;
         this.currentTransfer = null;
         
         this.initializeElements();
         this.attachEventListeners();
-        this.startPolling();
+        this.startEventStream();
         
         console.log('🚀 Telekinesis initialized');
     }
@@ -47,7 +47,7 @@ class TelekinesisApp {
         this.answerSection = document.getElementById('answerSection');
         this.connectionSection = document.getElementById('connectionSection');
         this.transferSection = document.getElementById('transferSection');
-        this.receivedSection = document.getElementById('receivedSection');
+        this.chatSection = document.getElementById('chatSection');
         
         // File upload
         this.fileUploadArea = document.getElementById('fileUploadArea');
@@ -341,27 +341,65 @@ class TelekinesisApp {
     }
     
     // Event Polling
-    startPolling() {
-        this.pollingInterval = setInterval(async () => {
+    startEventStream() {
+        this.eventSource = new EventSource('/api/events');
+        
+        this.eventSource.onmessage = (event) => {
             try {
-                const events = await this.apiCall('get_events');
+                const eventData = JSON.parse(event.data);
+                console.log('📡 SSE Event received:', eventData);
+                
+                // Skip heartbeat events
+                if (eventData.type === 'heartbeat') {
+                    return;
+                }
+                
+                // Handle real events  
+                const events = {[eventData.type]: eventData.data};
                 this.handleEvents(events);
+                
             } catch (error) {
-                console.error('Polling error:', error);
+                console.error('Error parsing SSE event:', error, event.data);
             }
-        }, 1000);
+        };
+        
+        this.eventSource.onerror = (error) => {
+            console.error('SSE connection error:', error);
+            this.eventSource.close();
+            
+            // Reconnect after 3 seconds
+            setTimeout(() => {
+                console.log('Reconnecting SSE...');
+                this.startEventStream();
+            }, 3000);
+        };
+        
+        this.eventSource.onopen = () => {
+            console.log('✅ SSE connection established');
+        };
+    }
+    
+    async updateConnectionFromStatus() {
+        try {
+            const status = await this.apiCall('status');
+            this.updateConnectionState(status.connection_state, status.is_connected);
+        } catch (error) {
+            console.error('Failed to get connection status:', error);
+        }
     }
     
     handleEvents(events) {
         // Update connection state
-        if (events.connection_state !== this.connectionState) {
+        if (events.connection_state !== undefined && events.connection_state !== this.connectionState) {
             this.connectionState = events.connection_state;
-            this.updateConnectionState(events.connection_state, events.is_connected);
-        }
-        
-        // Hide loading spinner when connection is established
-        if (events.connection_state === 'connected' && events.is_connected) {
-            this.hideLoading();
+            
+            // Fetch current status when connection state changes
+            this.updateConnectionFromStatus();
+            
+            // Hide loading spinner when connected
+            if (events.connection_state === 'connected') {
+                this.hideLoading();
+            }
         }
         
         // Handle remote disconnections
@@ -434,12 +472,12 @@ class TelekinesisApp {
             this.disconnectBtn.style.display = 'block';
             this.hideResetButton();
             this.transferSection.style.display = 'block';
-            this.receivedSection.style.display = 'block';
+            this.chatSection.style.display = 'block';
             this.connectionSection.style.display = 'none';
         } else {
             this.disconnectBtn.style.display = 'none';
             this.transferSection.style.display = 'none';
-            this.receivedSection.style.display = 'none';
+            this.chatSection.style.display = 'none';
             this.connectionSection.style.display = 'block';
         }
     }
@@ -616,7 +654,7 @@ class TelekinesisApp {
         
         // Hide sections
         this.transferSection.style.display = 'none';
-        this.receivedSection.style.display = 'none';
+        this.chatSection.style.display = 'none';
         this.connectionSection.style.display = 'block';
         this.signalingData.style.display = 'none';
         this.answerSection.style.display = 'none';
@@ -651,8 +689,8 @@ class TelekinesisApp {
     
     // Cleanup
     destroy() {
-        if (this.pollingInterval) {
-            clearInterval(this.pollingInterval);
+        if (this.eventSource) {
+            this.eventSource.close();
         }
     }
 }

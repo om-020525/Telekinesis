@@ -357,6 +357,7 @@ class NetworkingManager:
         self.connection_events: Dict[str, Any] = {}
         self._loop = None
         self._loop_thread = None
+        self._event_callback = None  # SSE callback function
     
     def _get_event_loop(self):
         """Get or create the persistent event loop"""
@@ -382,11 +383,30 @@ class NetworkingManager:
                 logger.info(f"{operation_name} completed successfully")
             except Exception as e:
                 logger.error(f"Error in {operation_name}: {e}")
-                self.connection_events['error'] = str(e)
+                self._emit_event('error', str(e))
         
         loop = self._get_event_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         future.add_done_callback(done_callback)
+    
+    def set_event_callback(self, callback):
+        """Set callback function for SSE event emission"""
+        self._event_callback = callback
+    
+    def _emit_event(self, event_type: str, data: Any):
+        """Emit event to both local storage and SSE callback"""
+        # Store locally for compatibility
+        self.connection_events[event_type] = data
+        
+        # Emit to SSE if callback is set
+        if self._event_callback:
+            try:
+                logger.info(f"🔥 Emitting SSE event: {event_type} = {data}")
+                self._event_callback(event_type, data)
+            except Exception as e:
+                logger.error(f"Error emitting SSE event: {e}")
+        else:
+            logger.warning(f"⚠️ No SSE callback set for event: {event_type}")
     
     def _execute_async_operation(self, operation_name: str, async_func, result_key: str = None, *args, **kwargs):
         """Generic wrapper for async operations with consistent error handling"""
@@ -394,12 +414,12 @@ class NetworkingManager:
             try:
                 result = await async_func(*args, **kwargs)
                 if result is not None and result_key:
-                    self.connection_events[result_key] = result
+                    self._emit_event(result_key, result)
                 return result
             except Exception as e:
                 error_msg = f"Error in {operation_name}: {e}"
                 logger.error(error_msg)
-                self.connection_events['error'] = str(e)
+                self._emit_event('error', str(e))
                 raise
         
         self._run_async_task(operation_name, wrapper())
@@ -408,7 +428,7 @@ class NetworkingManager:
         """Check if connection exists, set error if not"""
         if not self.connection:
             error_msg = f"No active connection for {operation_name}"
-            self.connection_events['error'] = error_msg
+            self._emit_event('error', error_msg)
             logger.error(error_msg)
             return False
         return True
@@ -419,7 +439,7 @@ class NetworkingManager:
             return False
         if not self.connection.is_connected():
             error_msg = f"Connection not ready for {operation_name}"
-            self.connection_events['error'] = error_msg
+            self._emit_event('error', error_msg)
             logger.error(error_msg)
             return False
         return True
@@ -430,7 +450,7 @@ class NetworkingManager:
         
         # Setup event callbacks
         async def on_connection_state_change(state):
-            self.connection_events['connection_state'] = state
+            self._emit_event('connection_state', state)
             logger.info(f"Connection state changed to: {state}")
             
             # Clear connection reference on termination
@@ -439,20 +459,20 @@ class NetworkingManager:
                 self.connection = None
         
         async def on_file_received(file_path, filename):
-            self.connection_events['file_received'] = {
+            self._emit_event('file_received', {
                 'path': file_path,
                 'filename': filename
-            }
+            })
             logger.info(f"File received: {filename}")
         
         async def on_transfer_progress(progress, is_sending):
-            self.connection_events['progress'] = {
+            self._emit_event('progress', {
                 'progress': progress,
                 'is_sending': is_sending
-            }
+            })
         
         async def on_message(message):
-            self.connection_events['message'] = message
+            self._emit_event('message', message)
             logger.info(f"Message received: {message}")
         
         connection.on_connection_state_change = on_connection_state_change

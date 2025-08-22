@@ -6,6 +6,10 @@
     <title>Telekinesis - P2P File Transfer</title>
     <link rel="stylesheet" href="/static/main_style.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon/favicon-16x16.png">
+    <link rel="manifest" href="/static/favicon/site.webmanifest">
 </head>
 <body>
     <div class="container">
@@ -15,7 +19,7 @@
                 <i class="fas fa-share-alt"></i>
                 <h1>Telekinesis</h1>
             </div>
-            <p class="subtitle">Zero-Cost Peer-to-Peer File Transfer</p>
+            <p class="subtitle">Keeping it together</p>
         </header>
 
         <!-- Connection Status -->
@@ -137,9 +141,23 @@
                     </div>
                 </div>
 
-                <!-- Chat Section -->
+                <!-- Received Files -->
+                <div class="transfer-card">
+                    <h3><i class="fas fa-inbox"></i> Received Files</h3>
+                    <div class="received-files" id="receivedFiles">
+                        <div class="empty-state">
+                            <i class="fas fa-folder-open"></i>
+                            <p>No files received yet</p>
+                            <span>Files will appear here when received</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Section -->
+            <div class="section" id="chatSection" style="display: none;">
+                <h2><i class="fas fa-comments"></i> Chat</h2>
                 <div class="chat-card">
-                    <h3><i class="fas fa-comments"></i> Chat</h3>
                     <div class="chat-messages" id="chatMessages">
                         <div class="chat-message system">
                             <i class="fas fa-info-circle"></i>
@@ -154,32 +172,7 @@
                     </div>
                 </div>
             </div>
-
-            <!-- Received Files Section -->
-            <div class="section" id="receivedSection" style="display: none;">
-                <h2><i class="fas fa-inbox"></i> Received Files</h2>
-                <div class="received-files" id="receivedFiles">
-                    <div class="empty-state">
-                        <i class="fas fa-folder-open"></i>
-                        <p>No files received yet</p>
-                        <span>Files will appear here when received</span>
-                    </div>
-                </div>
-            </div>
         </div>
-
-        <!-- Footer -->
-        <footer class="footer">
-            <p>
-                <i class="fas fa-shield-alt"></i> 
-                Secure P2P transfer • No servers • Zero cost • Privacy first
-            </p>
-            <div class="footer-links">
-                <span>Files saved to Downloads folder</span>
-                <span>•</span>
-                <span>WebRTC Technology</span>
-            </div>
-        </footer>
     </div>
 
     <!-- Loading Overlay -->
