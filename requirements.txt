@@ -1,0 +1,19 @@
+# Telekinesis - WebRTC P2P File Transfer
+# Python dependencies for zero-cost peer-to-peer file sharing
+
+# Web Framework
+Flask>=2.3.0
+Werkzeug>=2.3.0
+
+# WebRTC Support - using newer version with better Windows compatibility
+aiortc>=1.7.0
+aiofiles>=23.0.0
+
+# Crypto and Hashing
+cryptography>=40.0.0
+
+# For better error handling and logging
+colorama>=0.4.0
+
+# Optional: For better development experience
+python-dotenv>=1.0.0
