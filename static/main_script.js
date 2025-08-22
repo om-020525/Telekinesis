@@ -23,6 +23,7 @@ class TelekinesisApp {
         this.createAnswerBtn = document.getElementById('createAnswerBtn');
         this.setAnswerBtn = document.getElementById('setAnswerBtn');
         this.disconnectBtn = document.getElementById('disconnectBtn');
+        this.resetBtn = document.getElementById('resetBtn');
         this.copyBtn = document.getElementById('copyBtn');
         this.downloadBtn = document.getElementById('downloadBtn');
         this.sendFileBtn = document.getElementById('sendFileBtn');
@@ -76,6 +77,7 @@ class TelekinesisApp {
         this.createAnswerBtn.addEventListener('click', () => this.createAnswer());
         this.setAnswerBtn.addEventListener('click', () => this.setAnswer());
         this.disconnectBtn.addEventListener('click', () => this.disconnect());
+        this.resetBtn.addEventListener('click', () => this.resetUI());
         
         // Signaling actions
         this.copyBtn.addEventListener('click', () => this.copySignalingData());
@@ -357,6 +359,24 @@ class TelekinesisApp {
             this.updateConnectionState(events.connection_state, events.is_connected);
         }
         
+        // Hide loading spinner when connection is established
+        if (events.connection_state === 'connected' && events.is_connected) {
+            this.hideLoading();
+        }
+        
+        // Handle remote disconnections
+        if (events.connection_state === 'closed' || events.connection_state === 'failed' || 
+            events.connection_state === 'disconnected') {
+            this.hideLoading();
+            if (events.connection_state === 'closed') {
+                this.showNotification('Remote peer disconnected', 'warning');
+            } else if (events.connection_state === 'failed') {
+                this.showNotification('Connection failed', 'error');
+            }
+            // Show reset button for manual UI reset
+            this.showResetButton();
+        }
+        
         // Handle offer created
         if (events.offer) {
             this.hideLoading();
@@ -412,6 +432,7 @@ class TelekinesisApp {
         // Show/hide sections based on connection state
         if (isConnected) {
             this.disconnectBtn.style.display = 'block';
+            this.hideResetButton();
             this.transferSection.style.display = 'block';
             this.receivedSection.style.display = 'block';
             this.connectionSection.style.display = 'none';
@@ -555,6 +576,14 @@ class TelekinesisApp {
         this.loadingOverlay.style.display = 'none';
     }
     
+    showResetButton() {
+        this.resetBtn.style.display = 'block';
+    }
+    
+    hideResetButton() {
+        this.resetBtn.style.display = 'none';
+    }
+    
     showNotification(message, type = 'info') {
         const iconMap = {
             'success': 'fa-check-circle',
@@ -592,6 +621,7 @@ class TelekinesisApp {
         this.signalingData.style.display = 'none';
         this.answerSection.style.display = 'none';
         this.disconnectBtn.style.display = 'none';
+        this.hideResetButton();
         
         // Reset forms
         this.offerInput.value = '';
