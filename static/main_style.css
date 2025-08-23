@@ -53,11 +53,19 @@ body {
     flex-direction: column;
 }
 
+/* Top Navigation */
+.top-nav {
+    display: flex;
+    align-items: center;
+    margin-bottom: 30px;
+    padding: 0 10px;
+}
+
 /* Header Styles */
 .header {
     text-align: center;
-    margin-bottom: 30px;
     color: white;
+    flex: 1;
 }
 
 .logo {
@@ -91,24 +99,19 @@ body {
     font-weight: 300;
 }
 
-/* Status Bar */
-.status-bar {
-    background: var(--bg-card);
-    border-radius: var(--border-radius);
-    padding: 15px 20px;
-    margin-bottom: 30px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: var(--shadow-sm);
-    border: 1px solid var(--border-color);
-}
-
+/* Fixed width containers for proper centering */
 .status-indicator {
     display: flex;
     align-items: center;
     gap: 10px;
     font-weight: 500;
+    color: white;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 8px 16px;
+    border-radius: 20px;
+    backdrop-filter: blur(10px);
+    width: 160px;
+    justify-content: center;
 }
 
 .status-indicator i {
@@ -268,16 +271,30 @@ body {
 .disconnect-btn {
     background: var(--danger-color);
     color: white;
-    padding: 8px 16px;
+    width: 44px;
+    height: 44px;
     border: none;
-    border-radius: var(--border-radius-sm);
-    font-size: 0.9rem;
+    border-radius: 50%;
+    font-size: 1.1rem;
     cursor: pointer;
     transition: var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-md);
 }
 
 .disconnect-btn:hover {
     background: #e53e3e;
+    transform: scale(1.05);
+}
+
+.disconnect-buttons {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    width: 160px;
+    justify-content: flex-end;
 }
 
 /* Form Elements */
@@ -614,10 +631,35 @@ textarea:focus, input[type="text"]:focus {
         grid-template-columns: 1fr;
     }
     
-    .status-bar {
-        flex-direction: column;
-        gap: 15px;
-        text-align: center;
+    .top-nav {
+        padding: 0 5px;
+    }
+    
+    .status-indicator {
+        width: 120px;
+        padding: 6px 12px;
+        font-size: 0.85rem;
+        gap: 6px;
+    }
+    
+    .disconnect-buttons {
+        width: 120px;
+        gap: 8px;
+        justify-content: flex-end;
+    }
+    
+    .disconnect-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 0.95rem;
+    }
+    
+    .header .logo h1 {
+        font-size: 2rem;
+    }
+    
+    .header .subtitle {
+        font-size: 1rem;
     }
     
     .data-actions {
@@ -644,8 +686,35 @@ textarea:focus, input[type="text"]:focus {
         gap: 10px;
     }
     
+    .top-nav {
+        padding: 0 2px;
+    }
+    
+    .status-indicator {
+        width: 100px;
+        padding: 4px 8px;
+        font-size: 0.75rem;
+        gap: 4px;
+    }
+    
+    .disconnect-buttons {
+        width: 100px;
+        gap: 6px;
+        justify-content: flex-end;
+    }
+    
+    .disconnect-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 0.9rem;
+    }
+    
     .logo h1 {
-        font-size: 2rem;
+        font-size: 1.75rem;
+    }
+    
+    .header .subtitle {
+        font-size: 0.9rem;
     }
     
     .section {

@@ -13,27 +13,29 @@
 </head>
 <body>
     <div class="container">
-        <!-- Header -->
-        <header class="header">
-            <div class="logo">
-                <i class="fas fa-share-alt"></i>
-                <h1>Telekinesis</h1>
-            </div>
-            <p class="subtitle">Keeping it together</p>
-        </header>
-
-        <!-- Connection Status -->
-        <div class="status-bar" id="statusBar">
+        <!-- Top Navigation -->
+        <div class="top-nav">
             <div class="status-indicator" id="statusIndicator">
                 <i class="fas fa-circle"></i>
                 <span id="statusText">Disconnected</span>
             </div>
-            <button class="disconnect-btn" id="disconnectBtn" style="display: none;">
-                <i class="fas fa-times"></i> Disconnect
-            </button>
-            <button class="disconnect-btn" id="resetBtn" style="display: none;">
-                <i class="fas fa-refresh"></i> Start New Connection
-            </button>
+            
+            <header class="header">
+                <div class="logo">
+                    <i class="fas fa-share-alt"></i>
+                    <h1>Telekinesis</h1>
+                </div>
+                <p class="subtitle">Keeping it together</p>
+            </header>
+            
+            <div class="disconnect-buttons">
+                <button class="disconnect-btn" id="disconnectBtn" style="display: none;">
+                    <i class="fas fa-phone-slash"></i>
+                </button>
+                <button class="disconnect-btn" id="resetBtn" style="display: none;">
+                    <i class="fas fa-refresh"></i>
+                </button>
+            </div>
         </div>
 
         <!-- Main Content -->
