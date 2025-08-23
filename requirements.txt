@@ -15,5 +15,8 @@ cryptography>=40.0.0
 # For better error handling and logging
 colorama>=0.4.0
 
+# Firebase (Cloud Signaling)
+firebase-admin>=6.0.0
+
 # Optional: For better development experience
 python-dotenv>=1.0.0
