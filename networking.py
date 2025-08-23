@@ -1,186 +1,303 @@
-"""
-WebRTC Networking Module for Peer-to-Peer File Transfer
-Handles all networking operations including connection setup, signaling, and file transfer
-"""
-
 import asyncio
 import json
 import hashlib
 import os
 import threading
 import time
+import queue
 from typing import Dict, Any, Callable, Optional
 from dataclasses import dataclass
 from aiortc import RTCPeerConnection, RTCDataChannel, RTCConfiguration, RTCIceServer
 from aiortc.contrib.signaling import object_to_string, object_from_string
+import firebase_admin
+from firebase_admin import credentials, firestore
 import logging
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants
-DEFAULT_CHUNK_SIZE = 16384  # 16KB chunks for file transfer
-ICE_GATHERING_TIMEOUT = 10  # seconds
-CHUNK_DELAY = 0.001  # seconds between chunks
+DEFAULT_CHUNK_SIZE = 16384
+ICE_GATHERING_TIMEOUT = 10
+CHUNK_DELAY = 0.001
 STUN_SERVERS = [
     "stun:stun.l.google.com:19302",
     "stun:stun1.l.google.com:19302", 
-    "stun:stun.cloudflare.com:3478"
+    "stun:stun2.l.google.com:19302",
+    "stun:stun3.l.google.com:19302",
+    "stun:stun4.l.google.com:19302",
+    "stun:stun.ekiga.net",
+    "stun:stun.ideasip.com",
+    "stun:stun.rixtelecom.se",
+    "stun:stun.schlund.de",
+    "stun:stunserver.org",
+    "stun:stun.softjoys.com",
+    "stun:stun.voiparound.com",
+    "stun:stun.voipbuster.com",
+    "stun:stun.voipstunt.com",
+    "stun:stun.voxgratia.org"
 ]
 
 @dataclass
 class FileMetadata:
-    """Metadata for file transfer"""
     filename: str
     size: int
     chunk_size: int
     total_chunks: int
     file_hash: str
 
-class WebRTCConnection:
-    """Handles WebRTC peer-to-peer connection and file transfer"""
-    
+class Events:
     def __init__(self):
-        # Use free STUN servers for NAT traversal
-        ice_servers = [RTCIceServer(urls=[url]) for url in STUN_SERVERS]
+        self.queue = queue.Queue()
+        self.lock = threading.Lock()
+    
+    TYPES = {
+        'offer_created': 'offer_created',
+        'answer_created': 'answer_created',
+        'answer_received': 'answer_received',
+        'connection_state_changed': 'connection_state_changed',
+        'error': 'error',
+        'progress': 'progress',
+        'file_received': 'file_received',
+        'message_received': 'message_received',
+    }
+    
+    def add_event(self, event_type, data):
+        with self.lock:
+            self.queue.put({'type': event_type, 'data': data})
+    
+    def get_event(self, timeout=1):
+        return self.queue.get(timeout=timeout)
+    
+    def clear_queue(self):
+        with self.lock:
+            while not self.queue.empty():
+                try:
+                    self.queue.get_nowait()
+                except queue.Empty:
+                    break
+    
+
+class SignalingManager:
+    def __init__(self):
+        try :
+            cred = credentials.Certificate("secrets/theater-4-friends-firebase-adminsdk-txcja-ae6a2eb7cf.json")
+        except Exception as e:
+            logger.error(f"Error loading credentials: {e}")
+            raise e
+        try:
+            self.app = firebase_admin.initialize_app(cred)
+        except ValueError:
+            self.app = firebase_admin.get_app()
+        self.db = firestore.client()
+    
+        self.room_ref = None
+        self.room_name = None
+        self.user_name = None
+        self.listener = None
+
+    def set_offer(self, room_name, user_name, offer, events_instance):
+        self.room_name = room_name
+        self.user_name = user_name
         
-        configuration = RTCConfiguration(iceServers=ice_servers)
-        self.pc = RTCPeerConnection(configuration)
-        self.data_channel: Optional[RTCDataChannel] = None
+        self.room_ref = self.db.collection("rooms").document(room_name)
+        self.room_ref.set({
+            "name": room_name,
+            "initiator": user_name,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "offer": offer
+        })
+        self._setup_room_listener(events_instance)
+
+    def get_offer(self, room_name, user_name):
+        self.room_name = room_name
+        self.user_name = user_name
+
+        self.room_ref = self.db.collection("rooms").document(room_name)
+        self.room_ref.update({"responder": user_name})
+        
+        doc = self.room_ref.get()
+        if doc.exists:
+            return doc.to_dict().get("offer")
+        logger.error(f"Room {room_name} does not exist")
+        return None
+    
+    def get_answer(self):
+        if not self.room_ref:
+            return None
+        doc = self.room_ref.get()
+        if doc.exists:
+            return doc.to_dict().get("answer")
+        return None
+
+    def set_answer(self,value):
+        self.room_ref.update({"answer": value})
+    
+    def _setup_room_listener(self, events_instance):
+        def on_room_update(doc_snapshot, changes, read_time):
+            for doc in doc_snapshot:
+                data = doc.to_dict()
+                if "answer" in data and data["answer"]:
+                    events_instance.add_event('answer_received', data["answer"])
+                    threading.Timer(0.1, lambda: self._cleanup_listener()).start() 
+        
+        if self.listener:
+            self._cleanup_listener()
+        self.listener = self.room_ref.on_snapshot(on_room_update)
+    
+    def _cleanup_listener(self):
+        if self.listener:
+            try:
+                self.listener.unsubscribe()
+            except:
+                pass
+            self.listener = None
+
+    def _reset_signaling(self):
+        self._cleanup_listener()
+        self.room_ref = None
+        self.room_name = None
+        self.user_name = None
+
+
+class WebRTCManager:
+    def __init__(self, events_instance, loop):
+        self.pc = None
+        self.data_channel = None
         self.is_initiator = False
+        self.signaling_manager = SignalingManager()
+        self.events = events_instance
+        self.loop = loop
         
-        # File transfer state
-        self.file_chunks: Dict[int, bytes] = {}
-        self.current_file_metadata: Optional[FileMetadata] = None
+        self.file_chunks = {}
+        self.current_file_metadata = None
         self.received_chunks = 0
         
-        # Callbacks
-        self.on_connection_state_change: Optional[Callable] = None
-        self.on_file_received: Optional[Callable] = None
-        self.on_transfer_progress: Optional[Callable] = None
-        self.on_message: Optional[Callable] = None
+    async def _create_offer(self, room_name, user_name):
+        # Close existing connection if any
+        if self.pc:
+            await self.pc.close()
         
-        self._setup_event_handlers()
-    
-    def _setup_event_handlers(self):
-        """Setup WebRTC event handlers"""
+        ice_servers = [RTCIceServer(urls=[url]) for url in STUN_SERVERS]
+        self.pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
+        self._setup_pc_handlers()
+        self.is_initiator = True
         
+        self.data_channel = self.pc.createDataChannel("file_transfer")
+        self._setup_datachannel_handlers()
+        
+        offer = await self.pc.createOffer()
+        await self.pc.setLocalDescription(offer)
+        await self._wait_for_ice_gathering()
+        
+        offer_str = object_to_string(self.pc.localDescription)
+        self.signaling_manager.set_offer(room_name, user_name, offer_str, self.events)
+        self.events.add_event('offer_created', offer_str)
+
+    async def _create_answer(self, room_name, user_name):
+        # Close existing connection if any
+        if self.pc:
+            await self.pc.close()
+        
+        ice_servers = [RTCIceServer(urls=[url]) for url in STUN_SERVERS]
+        self.pc = RTCPeerConnection(RTCConfiguration(iceServers=ice_servers))
+        self._setup_pc_handlers()
+        
+        offer_str = self.signaling_manager.get_offer(room_name, user_name)
+        if not offer_str:
+            self.events.add_event('error', 'No offer found in room')
+            return
+            
+        offer = object_from_string(offer_str)
+        await self.pc.setRemoteDescription(offer)
+        
+        answer = await self.pc.createAnswer()
+        await self.pc.setLocalDescription(answer)
+        await self._wait_for_ice_gathering()
+        
+        answer_str = object_to_string(self.pc.localDescription)
+        self.signaling_manager.set_answer(answer_str)
+        self.events.add_event('answer_created', answer_str)
+
+    async def _set_answer(self, answer_str=None):
+        if not answer_str:
+            answer_str = self.signaling_manager.get_answer()
+        
+        if not answer_str:
+            self.events.add_event('error', 'No answer available')
+            return
+            
+        try:
+            answer = object_from_string(answer_str)
+            await self.pc.setRemoteDescription(answer)
+        except Exception as e:
+            self.events.add_event('error', f'Failed to set answer: {str(e)}')
+  
+    async def _wait_for_ice_gathering(self):
+        for _ in range(ICE_GATHERING_TIMEOUT * 10):
+            if self.pc.iceGatheringState == "complete":
+                break
+            await asyncio.sleep(0.1)
+
+    def _setup_pc_handlers(self):
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
-            state = self.pc.connectionState
-            logger.info(f"Connection state: {state}")
-            if self.on_connection_state_change:
-                await self.on_connection_state_change(state)
-            
-            # Handle disconnections and failures
-            if state in ["disconnected", "failed", "closed"]:
-                logger.info(f"Connection terminated: {state}")
-                # Clean up data channel reference
-                if self.data_channel:
-                    self.data_channel = None
+            self.events.add_event('connection_state_changed', self.pc.connectionState)
         
         @self.pc.on("datachannel")
         def on_datachannel(channel):
-            logger.info(f"Data channel received: {channel.label}")
             self.data_channel = channel
-            self._setup_datachannel_handlers(channel)
+            self._setup_datachannel_handlers()
     
-    def _setup_datachannel_handlers(self, channel: RTCDataChannel):
-        """Setup data channel event handlers"""
-        
-        @channel.on("open")
-        def on_open():
-            logger.info(f"Data channel {channel.label} opened")
-        
-        @channel.on("close")
-        def on_close():
-            logger.info(f"Data channel {channel.label} closed")
-            if self.on_connection_state_change:
-                asyncio.create_task(self.on_connection_state_change("closed"))
-        
-        @channel.on("message")
+    def _setup_datachannel_handlers(self):
+        @self.data_channel.on("message")
         def on_message(message):
-            asyncio.create_task(self._handle_message(message))
+            # Use the correct event loop
+            asyncio.run_coroutine_threadsafe(self._handle_message(message), self.loop)
     
     async def _handle_message(self, message):
-        """Handle incoming messages on data channel"""
-        try:
-            if isinstance(message, str):
-                # Control message
-                data = json.loads(message)
-                await self._handle_control_message(data)
-            elif isinstance(message, bytes):
-                # File chunk
-                await self._handle_file_chunk(message)
-        except Exception as e:
-            logger.error(f"Error handling message: {e}")
-    
-    async def _handle_control_message(self, data: Dict[str, Any]):
-        """Handle control messages"""
-        msg_type = data.get('type')
-        
-        if msg_type == 'file_metadata':
-            # Receiving file metadata
-            self.current_file_metadata = FileMetadata(**data['metadata'])
-            self.file_chunks = {}
-            self.received_chunks = 0
-            logger.info(f"Receiving file: {self.current_file_metadata.filename}")
-            
-        elif msg_type == 'file_complete':
-            # File transfer complete
-            await self._assemble_file()
-            
-        elif msg_type == 'text_message':
-            # Text message
-            if self.on_message:
-                await self.on_message(data['content'])
-    
-    async def _handle_file_chunk(self, chunk_data: bytes):
-        """Handle incoming file chunk"""
+        if isinstance(message, str):
+            data = json.loads(message)
+            if data.get('type') == 'file_metadata':
+                self.current_file_metadata = FileMetadata(**data['metadata'])
+                self.file_chunks = {}
+                self.received_chunks = 0
+            elif data.get('type') == 'file_complete':
+                await self._assemble_file()
+            elif data.get('type') == 'text_message':
+                self.events.add_event('message_received', data['content'])
+        elif isinstance(message, bytes):
+            await self._handle_file_chunk(message)
+
+    async def _handle_file_chunk(self, chunk_data):
         if not self.current_file_metadata:
-            logger.error("Received file chunk without metadata")
             return
         
-        # Extract chunk index (first 4 bytes) and data
         chunk_index = int.from_bytes(chunk_data[:4], byteorder='big')
         chunk_content = chunk_data[4:]
-        
         self.file_chunks[chunk_index] = chunk_content
         self.received_chunks += 1
         
-        # Update progress
         progress = (self.received_chunks / self.current_file_metadata.total_chunks) * 100
-        if self.on_transfer_progress:
-            await self.on_transfer_progress(progress, False)  # False = receiving
-        
-        logger.info(f"Received chunk {chunk_index + 1}/{self.current_file_metadata.total_chunks}")
+        self.events.add_event('progress', {'progress': progress, 'is_sending': False})   
     
     async def _assemble_file(self):
-        """Assemble received file chunks"""
         if not self.current_file_metadata or not self.file_chunks:
             return
         
-        # Assemble chunks in order
         file_data = b''
         for i in range(self.current_file_metadata.total_chunks):
             if i not in self.file_chunks:
-                logger.error(f"Missing chunk {i}")
                 return
             file_data += self.file_chunks[i]
         
-        # Verify file integrity
         file_hash = hashlib.sha256(file_data).hexdigest()
         if file_hash != self.current_file_metadata.file_hash:
-            logger.error("File integrity check failed")
             return
         
-        # Save file
-        downloads_dir = os.path.expanduser("~/Downloads")
+        downloads_dir = os.path.expanduser("~/Downloads/Telekinesis")
         os.makedirs(downloads_dir, exist_ok=True)
         file_path = os.path.join(downloads_dir, self.current_file_metadata.filename)
         
-        # Handle duplicate filenames
         counter = 1
         original_path = file_path
         while os.path.exists(file_path):
@@ -191,73 +308,29 @@ class WebRTCConnection:
         with open(file_path, 'wb') as f:
             f.write(file_data)
         
-        logger.info(f"File saved: {file_path}")
+        self.events.add_event('file_received', {
+            'path': file_path,
+            'filename': self.current_file_metadata.filename
+        })
         
-        if self.on_file_received:
-            await self.on_file_received(file_path, self.current_file_metadata.filename)
-        
-        # Clean up
         self.file_chunks = {}
         self.current_file_metadata = None
         self.received_chunks = 0
     
-    async def create_offer(self) -> str:
-        """Create WebRTC offer (initiator)"""
-        self.is_initiator = True
-        
-        # Create data channel
-        self.data_channel = self.pc.createDataChannel("file_transfer")
-        self._setup_datachannel_handlers(self.data_channel)
-        
-        # Create offer
-        offer = await self.pc.createOffer()
-        await self.pc.setLocalDescription(offer)
-        
-        # Wait for ICE gathering to complete
-        await self._wait_for_ice_gathering()
-        
-        # Return offer as string for manual signaling
-        return object_to_string(self.pc.localDescription)
-    
-    async def create_answer(self, offer_str: str) -> str:
-        """Create WebRTC answer (responder)"""
-        self.is_initiator = False
-        
-        # Set remote description from offer
-        offer = object_from_string(offer_str)
-        await self.pc.setRemoteDescription(offer)
-        
-        # Create answer
-        answer = await self.pc.createAnswer()
-        await self.pc.setLocalDescription(answer)
-        
-        # Wait for ICE gathering to complete
-        await self._wait_for_ice_gathering()
-        
-        # Return answer as string for manual signaling
-        return object_to_string(self.pc.localDescription)
-    
-    async def set_answer(self, answer_str: str):
-        """Set the answer (called by initiator)"""
-        answer = object_from_string(answer_str)
-        await self.pc.setRemoteDescription(answer)
-    
-    async def _wait_for_ice_gathering(self, timeout: int = ICE_GATHERING_TIMEOUT):
-        """Wait for ICE gathering to complete"""
-        for _ in range(timeout * 10):  # Check every 100ms
-            if self.pc.iceGatheringState == "complete":
-                break
-            await asyncio.sleep(0.1)
-    
-    async def send_file(self, file_path: str):
-        """Send a file through the data channel"""
+    async def _send_message(self, message):
+        if self.data_channel and self.data_channel.readyState == "open":
+            msg = {'type': 'text_message', 'content': message}
+            self.data_channel.send(json.dumps(msg))
+
+    async def _send_file(self, file_path):
         if not self.data_channel or self.data_channel.readyState != "open":
-            raise Exception("Data channel not ready")
+            self.events.add_event('error', 'Data channel not ready for file transfer')
+            return
         
         if not os.path.exists(file_path):
-            raise Exception("File not found")
+            self.events.add_event('error', f'File not found: {file_path}')
+            return
         
-        # Read file and calculate metadata
         with open(file_path, 'rb') as f:
             file_data = f.read()
         
@@ -267,311 +340,53 @@ class WebRTCConnection:
         total_chunks = (file_size + chunk_size - 1) // chunk_size
         file_hash = hashlib.sha256(file_data).hexdigest()
         
-        metadata = FileMetadata(
-            filename=filename,
-            size=file_size,
-            chunk_size=chunk_size,
-            total_chunks=total_chunks,
-            file_hash=file_hash
-        )
-        
-        # Send metadata
-        metadata_msg = {
+        metadata = {
             'type': 'file_metadata',
             'metadata': {
-                'filename': metadata.filename,
-                'size': metadata.size,
-                'chunk_size': metadata.chunk_size,
-                'total_chunks': metadata.total_chunks,
-                'file_hash': metadata.file_hash
+                'filename': filename,
+                'size': file_size,
+                'chunk_size': chunk_size,
+                'total_chunks': total_chunks,
+                'file_hash': file_hash
             }
         }
-        self.data_channel.send(json.dumps(metadata_msg))
+        self.data_channel.send(json.dumps(metadata))
         
-        # Send file chunks
         for i in range(total_chunks):
             start = i * chunk_size
             end = min(start + chunk_size, file_size)
             chunk = file_data[start:end]
-            
-            # Prepend chunk index (4 bytes)
             chunk_with_index = i.to_bytes(4, byteorder='big') + chunk
             self.data_channel.send(chunk_with_index)
             
-            # Update progress
             progress = ((i + 1) / total_chunks) * 100
-            if self.on_transfer_progress:
-                await self.on_transfer_progress(progress, True)  # True = sending
-            
-            # Small delay to prevent overwhelming the channel
+            self.events.add_event('progress', {'progress': progress, 'is_sending': True})
             await asyncio.sleep(CHUNK_DELAY)
         
-        # Send completion message
-        complete_msg = {'type': 'file_complete'}
-        self.data_channel.send(json.dumps(complete_msg))
+        self.data_channel.send(json.dumps({'type': 'file_complete'}))
         
-        logger.info(f"File sent: {filename}")
-    
-    async def send_message(self, message: str):
-        """Send a text message"""
-        if not self.data_channel or self.data_channel.readyState != "open":
-            raise Exception("Data channel not ready")
-        
-        msg = {
-            'type': 'text_message',
-            'content': message
-        }
-        self.data_channel.send(json.dumps(msg))
-    
-    def get_connection_state(self) -> str:
-        """Get current connection state"""
-        return self.pc.connectionState
-    
-    def is_connected(self) -> bool:
-        """Check if connection is established"""
-        return (self.pc.connectionState == "connected" and 
-                self.data_channel and 
-                self.data_channel.readyState == "open")
-    
-    async def close(self):
-        """Close the connection"""
-        logger.info("Closing WebRTC connection")
-        
-        # Close data channel first
-        if self.data_channel:
-            self.data_channel.close()
-            self.data_channel = None
-        
-        # Close peer connection
-        await self.pc.close()
-        
-        # Notify about closure
-        if self.on_connection_state_change:
-            await self.on_connection_state_change("closed")
+        if 'temp' in file_path and os.path.exists(file_path):
+            os.remove(file_path)
 
-class NetworkingManager:
-    """High-level manager for WebRTC connections with event handling"""
+    def _reset(self):
+        if self.pc:
+            asyncio.run_coroutine_threadsafe(self.pc.close(), self.loop)
+        self.pc = None
+        self.data_channel = None
+        self.is_initiator = False
+        self.signaling_manager._reset_signaling()
+        self.file_chunks = {}
+        self.current_file_metadata = None
+        self.received_chunks = 0
     
-    def __init__(self):
-        self.connection: Optional[WebRTCConnection] = None
-        self.connection_events: Dict[str, Any] = {}
-        self._loop = None
-        self._loop_thread = None
-        self._event_callback = None  # SSE callback function
-    
-    def _get_event_loop(self):
-        """Get or create the persistent event loop"""
-        if self._loop is None or self._loop.is_closed():
-            def start_loop():
-                self._loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self._loop)
-                self._loop.run_forever()
-            
-            self._loop_thread = threading.Thread(target=start_loop, daemon=True)
-            self._loop_thread.start()
-            
-            # Wait for loop to start
-            time.sleep(0.1)
-        
-        return self._loop
-    
-    def _run_async_task(self, operation_name: str, coro):
-        """Schedule async task in the persistent event loop (non-blocking)"""
-        def done_callback(future):
-            try:
-                future.result()
-                logger.info(f"{operation_name} completed successfully")
-            except Exception as e:
-                logger.error(f"Error in {operation_name}: {e}")
-                self._emit_event('error', str(e))
-        
-        loop = self._get_event_loop()
-        future = asyncio.run_coroutine_threadsafe(coro, loop)
-        future.add_done_callback(done_callback)
-    
-    def set_event_callback(self, callback):
-        """Set callback function for SSE event emission"""
-        self._event_callback = callback
-    
-    def _emit_event(self, event_type: str, data: Any):
-        """Emit event to both local storage and SSE callback"""
-        # Store locally for compatibility
-        self.connection_events[event_type] = data
-        
-        # Emit to SSE if callback is set
-        if self._event_callback:
-            try:
-                logger.info(f"🔥 Emitting SSE event: {event_type} = {data}")
-                self._event_callback(event_type, data)
-            except Exception as e:
-                logger.error(f"Error emitting SSE event: {e}")
-        else:
-            logger.warning(f"⚠️ No SSE callback set for event: {event_type}")
-    
-    def _execute_async_operation(self, operation_name: str, async_func, result_key: str = None, *args, **kwargs):
-        """Generic wrapper for async operations with consistent error handling"""
-        async def wrapper():
-            try:
-                result = await async_func(*args, **kwargs)
-                if result is not None and result_key:
-                    self._emit_event(result_key, result)
-                return result
-            except Exception as e:
-                error_msg = f"Error in {operation_name}: {e}"
-                logger.error(error_msg)
-                self._emit_event('error', str(e))
-                raise
-        
-        self._run_async_task(operation_name, wrapper())
-    
-    def _ensure_connection_exists(self, operation_name: str) -> bool:
-        """Check if connection exists, set error if not"""
-        if not self.connection:
-            error_msg = f"No active connection for {operation_name}"
-            self._emit_event('error', error_msg)
-            logger.error(error_msg)
-            return False
-        return True
-    
-    def _ensure_connection_ready(self, operation_name: str) -> bool:
-        """Check if connection is ready for operations"""
-        if not self._ensure_connection_exists(operation_name):
-            return False
-        if not self.connection.is_connected():
-            error_msg = f"Connection not ready for {operation_name}"
-            self._emit_event('error', error_msg)
-            logger.error(error_msg)
-            return False
-        return True
-    
-    def _create_new_connection(self) -> WebRTCConnection:
-        """Create and setup a new WebRTC connection with callbacks"""
-        connection = WebRTCConnection()
-        
-        # Setup event callbacks
-        async def on_connection_state_change(state):
-            self._emit_event('connection_state', state)
-            logger.info(f"Connection state changed to: {state}")
-            
-            # Clear connection reference on termination
-            if state in ["disconnected", "failed", "closed"]:
-                logger.info("Connection terminated - clearing connection reference")
-                self.connection = None
-        
-        async def on_file_received(file_path, filename):
-            self._emit_event('file_received', {
-                'path': file_path,
-                'filename': filename
-            })
-            logger.info(f"File received: {filename}")
-        
-        async def on_transfer_progress(progress, is_sending):
-            self._emit_event('progress', {
-                'progress': progress,
-                'is_sending': is_sending
-            })
-        
-        async def on_message(message):
-            self._emit_event('message', message)
-            logger.info(f"Message received: {message}")
-        
-        connection.on_connection_state_change = on_connection_state_change
-        connection.on_file_received = on_file_received
-        connection.on_transfer_progress = on_transfer_progress
-        connection.on_message = on_message
-        
-        return connection
-    
-    def create_offer(self):
-        """Create WebRTC offer"""
-        # Force cleanup any existing connection
-        if self.connection:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self.connection.close(), 
-                    self._get_event_loop()
-                )
-            except:
-                pass
-            self.connection = None
-        
-        # Clear stale events
-        self.connection_events.clear()
-        
-        self.connection = self._create_new_connection()
-        self._execute_async_operation("Create Offer", self.connection.create_offer, "offer")
-    
-    def create_answer(self, offer_str: str):
-        """Create WebRTC answer"""
-        # Force cleanup any existing connection
-        if self.connection:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self.connection.close(), 
-                    self._get_event_loop()
-                )
-            except:
-                pass
-            self.connection = None
-        
-        # Clear stale events
-        self.connection_events.clear()
-        
-        self.connection = self._create_new_connection()
-        self._execute_async_operation("Create Answer", self.connection.create_answer, "answer", offer_str)
-    
-    def set_answer(self, answer_str: str):
-        """Set the answer (called by initiator)"""
-        if not self._ensure_connection_exists("Set Answer"):
-            return
-        self._execute_async_operation("Set Answer", self.connection.set_answer, None, answer_str)
-    
-    def send_file(self, file_path: str):
-        """Send a file through WebRTC with automatic cleanup"""
-        if not self._ensure_connection_ready("Send File"):
-            return
-        
-        async def _send_file_with_cleanup():
-            try:
-                await self.connection.send_file(file_path)
-                # Clean up temporary file if it's in temp directory
-                if 'temp' in file_path and os.path.exists(file_path):
-                    os.remove(file_path)
-                    logger.info(f"Temporary file cleaned up: {file_path}")
-            finally:
-                # Ensure cleanup even on error
-                if 'temp' in file_path and os.path.exists(file_path):
-                    os.remove(file_path)
-        
-        self._execute_async_operation("Send File", _send_file_with_cleanup, None)
-    
-    def send_message(self, message: str):
-        """Send a text message"""
-        if not self._ensure_connection_ready("Send Message"):
-            return
-        self._execute_async_operation("Send Message", self.connection.send_message, None, message)
-    
-    def disconnect(self):
-        """Disconnect the WebRTC connection"""
-        if self.connection:
-            self._execute_async_operation("Disconnect", self.connection.close, None)
-        
-        self.connection_events.clear()
-        self.connection = None  # Explicit cleanup
-        
-        # Stop event loop completely
-        if self._loop and not self._loop.is_closed():
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            self._loop = None
-            self._loop_thread = None
-    
-    def _get_connection_status(self) -> Dict[str, Any]:
-        """Get current connection status info"""
-        if self.connection:
+    def get_status(self):
+        if self.pc:
             return {
                 'has_connection': True,
-                'connection_state': self.connection.get_connection_state(),
-                'is_connected': self.connection.is_connected()
+                'connection_state': self.pc.connectionState,
+                'is_connected': (self.pc.connectionState == "connected" and 
+                               self.data_channel and 
+                               self.data_channel.readyState == "open")
             }
         else:
             return {
@@ -579,28 +394,112 @@ class NetworkingManager:
                 'connection_state': 'disconnected',
                 'is_connected': False
             }
+class NetworkingManager:
+    def __init__(self):
+        self._loop = None
+        self._loop_thread = None
+        self.events = Events()
+        self._start_event_loop()
+        self._start_event_processor()
+        self.web_rtc_manager = WebRTCManager(self.events, self._loop)
     
-    def get_events(self) -> Dict[str, Any]:
-        """Get and clear connection events"""
-        events = dict(self.connection_events)
-        self.connection_events.clear()
+    def _start_event_loop(self):
+        def start_loop():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_forever()
         
-        # Add current connection status
-        status = self._get_connection_status()
+        self._loop_thread = threading.Thread(target=start_loop, daemon=True)
+        self._loop_thread.start()
+        time.sleep(0.1)
+        
+    def _start_event_processor(self):
+        def process_events():
+            while True:
+                try:
+                    event = self.events.get_event(timeout=1)
+                    self._handle_event(event)
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    logger.error(f"Event processing error: {e}")
+        
+        threading.Thread(target=process_events, daemon=True).start()
+
+    def _handle_event(self, event):
+        event_type = event['type']
+        data = event['data']
+        
+        if event_type == 'answer_received':
+            asyncio.run_coroutine_threadsafe(self.web_rtc_manager._set_answer(data), self._loop)
+        elif event_type == 'offer_created':
+            logger.info(f"Offer created")
+        elif event_type == 'answer_created':
+            logger.info(f"Answer created")  
+        elif event_type == 'file_received':
+            logger.info(f"File received: {data['filename']}")
+        elif event_type == 'message_received':
+            logger.info(f"Message received: {data}")
+        elif event_type == 'connection_state_changed':
+            logger.info(f"Connection state: {data}")
+        elif event_type == 'error':
+            logger.error(f"Error: {data}")
+        elif event_type == 'progress':
+            if isinstance(data, dict) and 'progress' in data:
+                logger.info(f"Progress: {data['progress']}% ({'sending' if data.get('is_sending') else 'receiving'})")
+        
+        SSEManager.sse_callback(event_type, data)
+    
+    
+    def create_room(self, room_name, user_name):       
+        asyncio.run_coroutine_threadsafe(self.web_rtc_manager._create_offer(room_name, user_name), self._loop)
+    
+    def join_room(self, room_name, user_name):
+        asyncio.run_coroutine_threadsafe(self.web_rtc_manager._create_answer(room_name, user_name), self._loop)
+               
+    def send_file(self, file_path):
+        asyncio.run_coroutine_threadsafe(self.web_rtc_manager._send_file(file_path), self._loop)
+    
+    def send_message(self, message):
+        asyncio.run_coroutine_threadsafe(self.web_rtc_manager._send_message(message), self._loop)
+    
+    def disconnect(self):
+        if self.web_rtc_manager.pc:
+            asyncio.run_coroutine_threadsafe(self.web_rtc_manager.pc.close(), self._loop)
+        self.web_rtc_manager._reset()
+        self.events.clear_queue()
+        SSEManager.reset_sse_queue()
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+    
+    def get_status(self):
+        return self.web_rtc_manager.get_status()
+    
+    def get_events(self):
+        events = {}
+        status = self.get_status()
         events.update(status)
-        
         return events
+
+class SSEManager:
+    event_queue = queue.Queue()
+    event_queue_lock = threading.Lock()
     
-    def get_status(self) -> Dict[str, Any]:
-        """Get current connection status"""
-        return self._get_connection_status()
-    
-    def get_connection(self) -> Optional[WebRTCConnection]:
-        """Get current connection"""
-        return self.connection
-    
-    async def cleanup(self):
-        """Cleanup connections"""
-        if self.connection:
-            await self.connection.close()
-            self.connection = None
+    @staticmethod
+    def sse_callback(event_type, data):
+        event = {
+            'type': event_type, 
+            'data': data, 
+            'timestamp': time.time()
+        }
+        logger.info(f"📤 Queuing SSE event: {event}")
+        SSEManager.event_queue.put(event)
+
+    @staticmethod
+    def reset_sse_queue():
+        with SSEManager.event_queue_lock:
+            while not SSEManager.event_queue.empty():
+                try:
+                    SSEManager.event_queue.get_nowait()
+                except queue.Empty:
+                    break

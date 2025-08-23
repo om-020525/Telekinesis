@@ -11,7 +11,7 @@ import queue
 import time
 import json
 from threading import Lock
-from networking import NetworkingManager
+from networking import NetworkingManager, SSEManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -20,70 +20,45 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this'
 
-# Global event queue for SSE
-event_queue = queue.Queue()
-event_queue_lock = Lock()
-
-# Global networking manager
 networking_manager = NetworkingManager()
-
-# Connect networking manager to SSE queue
-def sse_callback(event_type, data):
-    event = {
-        'type': event_type, 
-        'data': data, 
-        'timestamp': time.time()
-    }
-    logger.info(f"📤 Queuing SSE event: {event}")
-    event_queue.put(event)
-
-networking_manager.set_event_callback(sse_callback)
 
 @app.route('/')
 def index():
     """Serve the main page"""
     return render_template('index.html')
 
-@app.route('/api/create_offer', methods=['POST'])
-def create_offer():
-    """Create WebRTC offer"""
-    try:
-        networking_manager.create_offer()
-        return jsonify({'status': 'success', 'message': 'Creating offer...'})
-    except Exception as e:
-        logger.error(f"Error in create_offer: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-@app.route('/api/create_answer', methods=['POST'])
-def create_answer():
-    """Create WebRTC answer"""
+@app.route('/api/create_room', methods=['POST'])
+def create_room():
+    """Create room with signaling"""
     try:
         data = request.get_json()
-        offer_str = data.get('offer')
+        room_name = data.get('room_name')
+        user_name = data.get('user_name')
         
-        if not offer_str:
-            return jsonify({'status': 'error', 'message': 'Offer is required'}), 400
+        if not room_name or not user_name:
+            return jsonify({'status': 'error', 'message': 'Room name and user name are required'}), 400
         
-        networking_manager.create_answer(offer_str)
-        return jsonify({'status': 'success', 'message': 'Creating answer...'})
+        networking_manager.create_room(room_name, user_name)
+        return jsonify({'status': 'success', 'message': f'Room {room_name} created'})
     except Exception as e:
-        logger.error(f"Error in create_answer: {e}")
+        logger.error(f"Error in create_room: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/api/set_answer', methods=['POST'])
-def set_answer():
-    """Set the answer (called by initiator)"""
+@app.route('/api/join_room', methods=['POST'])
+def join_room():
+    """Join existing room"""
     try:
         data = request.get_json()
-        answer_str = data.get('answer')
+        room_name = data.get('room_name')
+        user_name = data.get('user_name')
         
-        if not answer_str:
-            return jsonify({'status': 'error', 'message': 'Answer is required'}), 400
+        if not room_name or not user_name:
+            return jsonify({'status': 'error', 'message': 'Room name and user name are required'}), 400
         
-        networking_manager.set_answer(answer_str)
-        return jsonify({'status': 'success', 'message': 'Answer set successfully'})
+        networking_manager.join_room(room_name, user_name)
+        return jsonify({'status': 'success', 'message': f'Joined room {room_name}'})
     except Exception as e:
-        logger.error(f"Error in set_answer: {e}")
+        logger.error(f"Error in join_room: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/send_file', methods=['POST'])
@@ -125,20 +100,14 @@ def send_message():
         logger.error(f"Error in send_message: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/api/get_events', methods=['GET'])
-def get_events():
-    """Get connection events (polling endpoint)"""
-    try:
-        return jsonify(networking_manager.get_events())
-    except Exception as e:
-        logger.error(f"Error in get_events: {e}")
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/api/disconnect', methods=['POST'])
 def disconnect():
     """Disconnect the WebRTC connection"""
     try:
+        global networking_manager
         networking_manager.disconnect()
+        del networking_manager
+        networking_manager = NetworkingManager()
         return jsonify({'status': 'success', 'message': 'Disconnected'})
     except Exception as e:
         logger.error(f"Error in disconnect: {e}")
@@ -161,7 +130,7 @@ def event_stream():
             while True:
                 try:
                     # Wait for events with timeout
-                    event = event_queue.get(timeout=30)
+                    event = SSEManager.event_queue.get(timeout=30)
                     
                     # Send event to client
                     event_data = {
@@ -212,13 +181,6 @@ if __name__ == '__main__':
     os.makedirs('templates', exist_ok=True)
     os.makedirs('static', exist_ok=True)
     os.makedirs('temp', exist_ok=True)
-    
-    print("🚀 Telekinesis File Transfer Server Starting...")
-    print("📡 WebRTC P2P File Transfer Application")
-    print(f"🌐 Open your browser and navigate to: http://localhost:{args.port}")
-    print("📁 Files will be saved to your Downloads folder")
-    print("⚡ Zero-cost peer-to-peer file sharing!")
-    print("\n" + "="*50)
     
     # Run Flask app
     app.run(host='0.0.0.0', port=args.port, debug=True, threaded=True)

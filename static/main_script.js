@@ -1,14 +1,10 @@
-/**
- * Telekinesis - WebRTC P2P File Transfer Frontend
- * Handles all client-side interactions and WebRTC communication
- */
-
 class TelekinesisApp {
     constructor() {
-        this.isInitiator = false;
         this.connectionState = 'disconnected';
         this.eventSource = null;
-        this.currentTransfer = null;
+        this.currentRoom = null;
+        this.userName = null;
+        this.isRoomCreator = false;
         
         this.initializeElements();
         this.attachEventListeners();
@@ -18,95 +14,76 @@ class TelekinesisApp {
     }
     
     initializeElements() {
-        // Buttons
-        this.createOfferBtn = document.getElementById('createOfferBtn');
-        this.createAnswerBtn = document.getElementById('createAnswerBtn');
-        this.setAnswerBtn = document.getElementById('setAnswerBtn');
+        this.userNameInput = document.getElementById('userNameInput');
+        this.roomNameInput = document.getElementById('roomNameInput');
+        this.createRoomBtn = document.getElementById('createRoomBtn');
+        this.joinRoomBtn = document.getElementById('joinRoomBtn');
+        this.copyRoomNameBtn = document.getElementById('copyRoomNameBtn');
+        
         this.disconnectBtn = document.getElementById('disconnectBtn');
         this.resetBtn = document.getElementById('resetBtn');
-        this.copyBtn = document.getElementById('copyBtn');
-        this.downloadBtn = document.getElementById('downloadBtn');
         this.sendFileBtn = document.getElementById('sendFileBtn');
         this.sendMessageBtn = document.getElementById('sendMessageBtn');
         
-        // Inputs
-        this.offerInput = document.getElementById('offerInput');
-        this.answerInput = document.getElementById('answerInput');
-        this.offerFileInput = document.getElementById('offerFileInput');
-        this.answerFileInput = document.getElementById('answerFileInput');
         this.fileInput = document.getElementById('fileInput');
         this.messageInput = document.getElementById('messageInput');
         
-        // Display elements
         this.statusIndicator = document.getElementById('statusIndicator');
         this.statusText = document.getElementById('statusText');
-        this.signalingData = document.getElementById('signalingData');
-        this.signalingTitle = document.getElementById('signalingTitle');
-        this.signalingContent = document.getElementById('signalingContent');
-        this.instructionText = document.getElementById('instructionText');
-        this.answerSection = document.getElementById('answerSection');
         this.connectionSection = document.getElementById('connectionSection');
         this.transferSection = document.getElementById('transferSection');
         this.chatSection = document.getElementById('chatSection');
+        this.roomStatus = document.getElementById('roomStatus');
+        this.currentRoomName = document.getElementById('currentRoomName');
+        this.connectionStatus = document.getElementById('connectionStatus');
+        this.shareableRoomName = document.getElementById('shareableRoomName');
+        this.roomInstructions = document.getElementById('roomInstructions');
         
-        // File upload
         this.fileUploadArea = document.getElementById('fileUploadArea');
         this.selectedFile = document.getElementById('selectedFile');
         this.fileName = document.getElementById('fileName');
         this.fileSize = document.getElementById('fileSize');
         
-        // Progress
         this.progressCard = document.getElementById('progressCard');
         this.progressTitle = document.getElementById('progressTitle');
         this.progressFill = document.getElementById('progressFill');
         this.progressText = document.getElementById('progressText');
         this.progressStatus = document.getElementById('progressStatus');
         
-        // Chat
         this.chatMessages = document.getElementById('chatMessages');
         this.receivedFiles = document.getElementById('receivedFiles');
         
-        // Overlays
         this.loadingOverlay = document.getElementById('loadingOverlay');
         this.notification = document.getElementById('notification');
     }
     
     attachEventListeners() {
-        // Connection buttons
-        this.createOfferBtn.addEventListener('click', () => this.createOffer());
-        this.createAnswerBtn.addEventListener('click', () => this.createAnswer());
-        this.setAnswerBtn.addEventListener('click', () => this.setAnswer());
+        this.createRoomBtn.addEventListener('click', () => this.createRoom());
+        this.joinRoomBtn.addEventListener('click', () => this.joinRoom());
+        this.copyRoomNameBtn.addEventListener('click', () => this.copyRoomName());
         this.disconnectBtn.addEventListener('click', () => this.disconnect());
         this.resetBtn.addEventListener('click', () => this.resetUI());
         
-        // Signaling actions
-        this.copyBtn.addEventListener('click', () => this.copySignalingData());
-        this.downloadBtn.addEventListener('click', () => this.downloadSignalingData());
-        
-        // File upload
         this.fileUploadArea.addEventListener('click', () => this.fileInput.click());
         this.fileUploadArea.addEventListener('dragover', (e) => this.handleDragOver(e));
         this.fileUploadArea.addEventListener('drop', (e) => this.handleDrop(e));
         this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         this.sendFileBtn.addEventListener('click', () => this.sendFile());
         
-        // Chat
         this.sendMessageBtn.addEventListener('click', () => this.sendMessage());
         this.messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.sendMessage();
         });
         
-        // File uploads for offer/answer
-        this.offerFileInput.addEventListener('change', (e) => this.handleOfferFileUpload(e));
-        this.answerFileInput.addEventListener('change', (e) => this.handleAnswerFileUpload(e));
-        
-        // Notification close
         document.querySelector('.notification-close').addEventListener('click', () => {
             this.hideNotification();
         });
+        
+        this.roomNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.createRoom();
+        });
     }
     
-    // API Communication
     async apiCall(endpoint, method = 'GET', data = null) {
         try {
             const options = {
@@ -141,69 +118,103 @@ class TelekinesisApp {
         }
     }
     
-    // Connection Management
-    async createOffer() {
+    async createRoom() {
         try {
-            this.isInitiator = true;
-            this.showLoading('Creating connection offer...');
+            const userName = this.userNameInput.value.trim();
+            const roomName = this.roomNameInput.value.trim();
             
-            const result = await this.apiCall('create_offer', 'POST');
-            if (result.status === 'success') {
-                this.showNotification('Creating offer...', 'info');
-            } else {
-                throw new Error(result.message);
-            }
-        } catch (error) {
-            this.hideLoading();
-            this.showNotification(`Failed to create offer: ${error.message}`, 'error');
-        }
-    }
-    
-    async createAnswer() {
-        try {
-            const offer = this.offerInput.value.trim();
-            if (!offer) {
-                this.showNotification('Please paste the connection offer', 'warning');
+            if (!userName) {
+                this.showNotification('Please enter your name', 'warning');
                 return;
             }
             
-            this.isInitiator = false;
-            this.showLoading('Creating connection answer...');
-            
-            const result = await this.apiCall('create_answer', 'POST', { offer });
-            if (result.status === 'success') {
-                this.showNotification('Creating answer...', 'info');
-                this.offerInput.value = '';
-            } else {
-                throw new Error(result.message);
-            }
-        } catch (error) {
-            this.hideLoading();
-            this.showNotification(`Failed to create answer: ${error.message}`, 'error');
-        }
-    }
-    
-    async setAnswer() {
-        try {
-            const answer = this.answerInput.value.trim();
-            if (!answer) {
-                this.showNotification('Please paste the connection answer', 'warning');
+            if (!roomName) {
+                this.showNotification('Please enter a room name', 'warning');
                 return;
             }
             
-            this.showLoading('Completing connection...');
+            this.userName = userName;
+            this.currentRoom = roomName;
+            this.isRoomCreator = true;
             
-            const result = await this.apiCall('set_answer', 'POST', { answer });
+            this.showLoading('Creating room...');
+            
+            const result = await this.apiCall('create_room', 'POST', {
+                room_name: roomName,
+                user_name: userName
+            });
+            
             if (result.status === 'success') {
-                this.showNotification('Completing connection...', 'info');
-                this.answerInput.value = '';
-                this.hideAnswerSection();
+                this.showRoomStatus(roomName, 'Waiting for peer...');
+                this.showNotification(`Room "${roomName}" created successfully`, 'success');
             } else {
                 throw new Error(result.message);
             }
         } catch (error) {
             this.hideLoading();
-            this.showNotification(`Failed to complete connection: ${error.message}`, 'error');
+            this.showNotification(`Failed to create room: ${error.message}`, 'error');
+        }
+    }
+    
+    async joinRoom() {
+        try {
+            const userName = this.userNameInput.value.trim();
+            const roomName = this.roomNameInput.value.trim();
+            
+            if (!userName) {
+                this.showNotification('Please enter your name', 'warning');
+                return;
+            }
+            
+            if (!roomName) {
+                this.showNotification('Please enter a room name', 'warning');
+                return;
+            }
+            
+            this.userName = userName;
+            this.currentRoom = roomName;
+            this.isRoomCreator = false;
+            
+            this.showLoading('Joining room...');
+            
+            const result = await this.apiCall('join_room', 'POST', {
+                room_name: roomName,
+                user_name: userName
+            });
+            
+            if (result.status === 'success') {
+                this.showRoomStatus(roomName, 'Connecting...');
+                this.showNotification(`Joined room "${roomName}"`, 'success');
+            } else {
+                throw new Error(result.message);
+            }
+        } catch (error) {
+            this.hideLoading();
+            this.showNotification(`Failed to join room: ${error.message}`, 'error');
+        }
+    }
+    
+    showRoomStatus(roomName, status) {
+        this.currentRoomName.textContent = roomName;
+        this.connectionStatus.textContent = status;
+        this.shareableRoomName.textContent = roomName;
+        
+        if (this.isRoomCreator) {
+            this.roomInstructions.style.display = 'block';
+        } else {
+            this.roomInstructions.style.display = 'none';
+        }
+        
+        this.roomStatus.style.display = 'block';
+        this.hideLoading();
+    }
+    
+    async copyRoomName() {
+        try {
+            await navigator.clipboard.writeText(this.currentRoom);
+            this.showNotification('Room name copied to clipboard!', 'success');
+        } catch (error) {
+            this.showNotification('Failed to copy room name', 'error');
         }
     }
     
@@ -219,7 +230,6 @@ class TelekinesisApp {
         }
     }
     
-    // File Transfer
     handleDragOver(e) {
         e.preventDefault();
         this.fileUploadArea.style.borderColor = 'var(--primary-color)';
@@ -253,37 +263,6 @@ class TelekinesisApp {
         this.selectedFile.style.display = 'flex';
     }
     
-    // File upload handlers for offer/answer
-    handleOfferFileUpload(e) {
-        const file = e.target.files[0];
-        if (file && file.type === 'text/plain') {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                this.offerInput.value = event.target.result;
-                this.showNotification('Offer file loaded successfully', 'success');
-            };
-            reader.readAsText(file);
-        } else {
-            this.showNotification('Please select a valid text file', 'warning');
-        }
-        e.target.value = ''; // Reset file input
-    }
-    
-    handleAnswerFileUpload(e) {
-        const file = e.target.files[0];
-        if (file && file.type === 'text/plain') {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                this.answerInput.value = event.target.result;
-                this.showNotification('Answer file loaded successfully', 'success');
-            };
-            reader.readAsText(file);
-        } else {
-            this.showNotification('Please select a valid text file', 'warning');
-        }
-        e.target.value = ''; // Reset file input
-    }
-    
     async sendFile() {
         try {
             if (!this.selectedFileData) {
@@ -308,7 +287,6 @@ class TelekinesisApp {
         }
     }
     
-    // Chat
     async sendMessage() {
         try {
             const message = this.messageInput.value.trim();
@@ -340,7 +318,6 @@ class TelekinesisApp {
         this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
     }
     
-    // Event Polling
     startEventStream() {
         this.eventSource = new EventSource('/api/events');
         
@@ -349,14 +326,11 @@ class TelekinesisApp {
                 const eventData = JSON.parse(event.data);
                 console.log('📡 SSE Event received:', eventData);
                 
-                // Skip heartbeat events
                 if (eventData.type === 'heartbeat') {
                     return;
                 }
                 
-                // Handle real events  
-                const events = {[eventData.type]: eventData.data};
-                this.handleEvents(events);
+                this.handleEvent(eventData);
                 
             } catch (error) {
                 console.error('Error parsing SSE event:', error, event.data);
@@ -367,7 +341,6 @@ class TelekinesisApp {
             console.error('SSE connection error:', error);
             this.eventSource.close();
             
-            // Reconnect after 3 seconds
             setTimeout(() => {
                 console.log('Reconnecting SSE...');
                 this.startEventStream();
@@ -379,133 +352,79 @@ class TelekinesisApp {
         };
     }
     
-    async updateConnectionFromStatus() {
-        try {
-            const status = await this.apiCall('status');
-            this.updateConnectionState(status.connection_state, status.is_connected);
-        } catch (error) {
-            console.error('Failed to get connection status:', error);
-        }
-    }
-    
-    handleEvents(events) {
-        // Update connection state
-        if (events.connection_state !== undefined && events.connection_state !== this.connectionState) {
-            this.connectionState = events.connection_state;
-            
-            // Fetch current status when connection state changes
-            this.updateConnectionFromStatus();
-            
-            // Hide loading spinner when connected
-            if (events.connection_state === 'connected') {
+    handleEvent(event) {
+        const { type, data } = event;
+        
+        switch (type) {
+            case 'offer_created':
+                this.connectionStatus.textContent = 'Room ready - waiting for peer';
+                break;
+                
+            case 'answer_created':
+                this.connectionStatus.textContent = 'Connecting...';
+                break;
+                
+            case 'connection_state_changed':
+                this.updateConnectionState(data);
+                break;
+                
+            case 'file_received':
+                this.hideProgressCard();
+                this.addReceivedFile(data.filename, data.path);
+                this.showNotification(`File received: ${data.filename}`, 'success');
+                break;
+                
+            case 'message_received':
+                this.addChatMessage(data, 'received');
+                break;
+                
+            case 'progress':
+                this.updateProgress(data.progress, data.is_sending);
+                break;
+                
+            case 'error':
                 this.hideLoading();
-            }
-        }
-        
-        // Handle remote disconnections
-        if (events.connection_state === 'closed' || events.connection_state === 'failed' || 
-            events.connection_state === 'disconnected') {
-            this.hideLoading();
-            if (events.connection_state === 'closed') {
-                this.showNotification('Remote peer disconnected', 'warning');
-            } else if (events.connection_state === 'failed') {
-                this.showNotification('Connection failed', 'error');
-            }
-            // Show reset button for manual UI reset
-            this.showResetButton();
-        }
-        
-        // Handle offer created
-        if (events.offer) {
-            this.hideLoading();
-            this.showSignalingData('Connection Offer', events.offer, 
-                'Copy this offer and send it to the other person. Wait for them to send you back an answer.');
-            this.showAnswerSection();
-        }
-        
-        // Handle answer created
-        if (events.answer) {
-            this.hideLoading();
-            this.showSignalingData('Connection Answer', events.answer, 
-                'Copy this answer and send it back to the person who sent you the offer.');
-        }
-        
-        // Handle transfer progress
-        if (events.progress) {
-            this.updateProgress(events.progress.progress, events.progress.is_sending);
-        }
-        
-        // Handle file received
-        if (events.file_received) {
-            this.hideProgressCard();
-            this.addReceivedFile(events.file_received.filename, events.file_received.path);
-            this.showNotification(`File received: ${events.file_received.filename}`, 'success');
-        }
-        
-        // Handle messages
-        if (events.message) {
-            this.addChatMessage(events.message, 'received');
-        }
-        
-        // Handle errors
-        if (events.error) {
-            this.hideLoading();
-            this.hideProgressCard();
-            this.showNotification(`Error: ${events.error}`, 'error');
+                this.hideProgressCard();
+                this.showNotification(`Error: ${data}`, 'error');
+                break;
         }
     }
     
-    // UI Updates
-    updateConnectionState(state, isConnected) {
-        this.statusText.textContent = this.getStatusText(state);
+    updateConnectionState(state) {
+        this.connectionState = state;
         
-        // Update status indicator
-        this.statusIndicator.className = 'status-indicator';
-        if (isConnected) {
-            this.statusIndicator.classList.add('connected');
-        } else if (state === 'connecting') {
-            this.statusIndicator.classList.add('connecting');
-        }
-        
-        // Show/hide sections based on connection state
-        if (isConnected) {
-            this.disconnectBtn.style.display = 'block';
-            this.hideResetButton();
-            this.transferSection.style.display = 'block';
-            this.chatSection.style.display = 'block';
-            this.connectionSection.style.display = 'none';
-        } else {
-            this.disconnectBtn.style.display = 'none';
-            this.transferSection.style.display = 'none';
-            this.chatSection.style.display = 'none';
-            this.connectionSection.style.display = 'block';
-        }
-    }
-    
-    getStatusText(state) {
-        const stateMap = {
+        const statusMap = {
             'disconnected': 'Disconnected',
             'connecting': 'Connecting...',
             'connected': 'Connected',
             'failed': 'Connection Failed',
             'closed': 'Connection Closed'
         };
-        return stateMap[state] || state;
-    }
-    
-    showSignalingData(title, data, instruction) {
-        this.signalingTitle.textContent = title;
-        this.signalingContent.value = data;
-        this.instructionText.textContent = instruction;
-        this.signalingData.style.display = 'block';
-    }
-    
-    showAnswerSection() {
-        this.answerSection.style.display = 'block';
-    }
-    
-    hideAnswerSection() {
-        this.answerSection.style.display = 'none';
+        
+        const statusText = statusMap[state] || state;
+        this.statusText.textContent = statusText;
+        this.connectionStatus.textContent = statusText;
+        
+        this.statusIndicator.className = 'status-indicator';
+        if (state === 'connected') {
+            this.statusIndicator.classList.add('connected');
+            this.disconnectBtn.style.display = 'block';
+            this.resetBtn.style.display = 'none';
+            this.transferSection.style.display = 'block';
+            this.chatSection.style.display = 'block';
+            this.connectionSection.style.display = 'none';
+            this.hideLoading();
+        } else if (state === 'connecting') {
+            this.statusIndicator.classList.add('connecting');
+        } else if (state === 'failed' || state === 'closed') {
+            this.disconnectBtn.style.display = 'none';
+            this.resetBtn.style.display = 'block';
+            if (state === 'failed') {
+                this.showNotification('Connection failed', 'error');
+            } else if (state === 'closed') {
+                this.showNotification('Connection closed by peer', 'warning');
+            }
+        }
     }
     
     showProgressCard(title, isSending) {
@@ -516,7 +435,6 @@ class TelekinesisApp {
     
     hideProgressCard() {
         this.progressCard.style.display = 'none';
-        this.currentTransfer = null;
     }
     
     updateProgress(progress, isSending) {
@@ -532,7 +450,6 @@ class TelekinesisApp {
     }
     
     addReceivedFile(filename, filepath) {
-        // Remove empty state if present
         const emptyState = this.receivedFiles.querySelector('.empty-state');
         if (emptyState) {
             emptyState.remove();
@@ -544,50 +461,11 @@ class TelekinesisApp {
             <i class="fas fa-file-download"></i>
             <div class="file-info">
                 <div class="name">${this.escapeHtml(filename)}</div>
-                <div class="details">Saved to Downloads • ${new Date().toLocaleTimeString()}</div>
+                <div class="details">Saved to Downloads/Telekinesis • ${new Date().toLocaleTimeString()}</div>
             </div>
-            <button class="btn btn-outline" onclick="this.openFileLocation('${this.escapeHtml(filepath)}')">
-                <i class="fas fa-folder-open"></i> Open Folder
-            </button>
         `;
         
         this.receivedFiles.insertBefore(fileItem, this.receivedFiles.firstChild);
-    }
-    
-    openFileLocation(filepath) {
-        // This would typically open the file location in the OS file manager
-        this.showNotification('File saved to Downloads folder', 'info');
-    }
-    
-    // Utility Functions
-    async copySignalingData() {
-        try {
-            await navigator.clipboard.writeText(this.signalingContent.value);
-            this.showNotification('Copied to clipboard!', 'success');
-        } catch (error) {
-            // Fallback for older browsers
-            this.signalingContent.select();
-            document.execCommand('copy');
-            this.showNotification('Copied to clipboard!', 'success');
-        }
-    }
-    
-    downloadSignalingData() {
-        const data = this.signalingContent.value;
-        const filename = this.isInitiator ? 'connection_offer.txt' : 'connection_answer.txt';
-        
-        const blob = new Blob([data], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        
-        this.showNotification(`Downloaded ${filename}`, 'success');
     }
     
     formatFileSize(bytes) {
@@ -604,7 +482,6 @@ class TelekinesisApp {
         return div.innerHTML;
     }
     
-    // Loading and Notifications
     showLoading(text) {
         document.getElementById('loadingText').textContent = text;
         this.loadingOverlay.style.display = 'flex';
@@ -612,14 +489,6 @@ class TelekinesisApp {
     
     hideLoading() {
         this.loadingOverlay.style.display = 'none';
-    }
-    
-    showResetButton() {
-        this.resetBtn.style.display = 'block';
-    }
-    
-    hideResetButton() {
-        this.resetBtn.style.display = 'none';
     }
     
     showNotification(message, type = 'info') {
@@ -637,7 +506,6 @@ class TelekinesisApp {
         this.notification.className = `notification ${type}`;
         this.notification.style.display = 'block';
         
-        // Auto-hide after 5 seconds
         setTimeout(() => {
             this.hideNotification();
         }, 5000);
@@ -648,46 +516,38 @@ class TelekinesisApp {
     }
     
     resetUI() {
-        // Reset connection state
         this.connectionState = 'disconnected';
-        this.isInitiator = false;
+        this.currentRoom = null;
+        this.userName = null;
+        this.isRoomCreator = false;
         
-        // Hide sections
         this.transferSection.style.display = 'none';
         this.chatSection.style.display = 'none';
         this.connectionSection.style.display = 'block';
-        this.signalingData.style.display = 'none';
-        this.answerSection.style.display = 'none';
+        this.roomStatus.style.display = 'none';
         this.disconnectBtn.style.display = 'none';
-        this.hideResetButton();
+        this.resetBtn.style.display = 'none';
         
-        // Reset forms
-        this.offerInput.value = '';
-        this.answerInput.value = '';
+        this.userNameInput.value = '';
+        this.roomNameInput.value = '';
         this.messageInput.value = '';
         this.fileInput.value = '';
         
-        // Reset file selection
         document.querySelector('.upload-placeholder').style.display = 'block';
         this.selectedFile.style.display = 'none';
         this.selectedFileData = null;
         
-        // Clear chat (except system message)
         this.chatMessages.innerHTML = `
             <div class="chat-message system">
                 <i class="fas fa-info-circle"></i>
-                <span>Connect with a peer to start transferring files and messages.</span>
+                <span>Connected! You can now send files and messages.</span>
             </div>
         `;
         
-        // Reset progress
         this.hideProgressCard();
-        
-        // Update status
-        this.updateConnectionState('disconnected', false);
+        this.updateConnectionState('disconnected');
     }
     
-    // Cleanup
     destroy() {
         if (this.eventSource) {
             this.eventSource.close();
@@ -695,12 +555,10 @@ class TelekinesisApp {
     }
 }
 
-// Initialize the application when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     window.telekinesisApp = new TelekinesisApp();
 });
 
-// Cleanup on page unload
 window.addEventListener('beforeunload', () => {
     if (window.telekinesisApp) {
         window.telekinesisApp.destroy();

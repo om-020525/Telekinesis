@@ -40,66 +40,45 @@
         <div class="main-content">
             <!-- Connection Setup Section -->
             <div class="section" id="connectionSection">
-                <h2><i class="fas fa-plug"></i> Connection Setup</h2>
-                <p class="section-description">Choose how you want to connect with another peer</p>
+                <h2><i class="fas fa-plug"></i> Room Connection</h2>
+                <p class="section-description">Create or join a room to connect with another peer</p>
                 
-                <div class="connection-options">
-                    <div class="option-card">
-                        <h3><i class="fas fa-rocket"></i> Start Connection (Initiator)</h3>
-                        <p>Create a connection offer and share it with the other person</p>
-                        <div class="button-row">
-                            <button class="btn btn-primary" id="createOfferBtn">
-                                <i class="fas fa-play"></i> Create Offer
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div class="option-card">
-                        <h3><i class="fas fa-handshake"></i> Join Connection (Responder)</h3>
-                        <p>Paste the offer from the other person or upload offer file</p>
-                        <textarea id="offerInput" placeholder="Paste the connection offer here..." rows="4"></textarea>
-                        <div class="button-row">
-                            <button class="btn btn-secondary" id="createAnswerBtn">
-                                <i class="fas fa-reply"></i> Create Answer
-                            </button>
-                            <input type="file" id="offerFileInput" accept=".txt" hidden>
-                            <button class="btn btn-outline" onclick="document.getElementById('offerFileInput').click()">
-                                <i class="fas fa-upload"></i> Upload Offer File
-                            </button>
-                        </div>
-                    </div>
+                <!-- User Name Input -->
+                <div class="input-group">
+                    <label for="userNameInput">Your Name:</label>
+                    <input type="text" id="userNameInput" placeholder="Enter your name..." maxlength="20" required>
+                </div>
+                
+                <!-- Room Name Input -->
+                <div class="input-group">
+                    <label for="roomNameInput">Room Name:</label>
+                    <input type="text" id="roomNameInput" placeholder="Enter room name..." maxlength="20" required>
+                </div>
+                
+                <div class="button-row">
+                    <button class="btn btn-primary" id="createRoomBtn">
+                        <i class="fas fa-plus"></i> Create Room
+                    </button>
+                    <button class="btn btn-secondary" id="joinRoomBtn">
+                        <i class="fas fa-sign-in-alt"></i> Join Room
+                    </button>
                 </div>
 
-                <!-- Signaling Data Display -->
-                <div class="signaling-data" id="signalingData" style="display: none;">
-                    <h3 id="signalingTitle">Connection Data</h3>
-                    <div class="data-container">
-                        <textarea id="signalingContent" readonly rows="6"></textarea>
-                        <div class="data-actions">
-                            <button class="btn btn-outline" id="copyBtn">
+                <!-- Room Status Display -->
+                <div class="room-status" id="roomStatus" style="display: none;">
+                    <h3 id="roomStatusTitle">Room Status</h3>
+                    <div class="room-info">
+                        <p><strong>Room:</strong> <span id="currentRoomName"></span></p>
+                        <p><strong>Status:</strong> <span id="connectionStatus">Connecting...</span></p>
+                    </div>
+                    <div class="room-instructions" id="roomInstructions">
+                        <p>Share this room name with the other person:</p>
+                        <div class="room-name-display">
+                            <span id="shareableRoomName"></span>
+                            <button class="btn btn-outline btn-sm" id="copyRoomNameBtn">
                                 <i class="fas fa-copy"></i> Copy
                             </button>
-                            <button class="btn btn-outline" id="downloadBtn">
-                                <i class="fas fa-download"></i> Download
-                            </button>
                         </div>
-                    </div>
-                    <p class="instruction-text" id="instructionText"></p>
-                </div>
-
-                <!-- Answer Input Section -->
-                <div class="answer-section" id="answerSection" style="display: none;">
-                    <h3><i class="fas fa-reply-all"></i> Complete Connection</h3>
-                    <p>Paste the answer from the other person or upload answer file</p>
-                    <textarea id="answerInput" placeholder="Paste the connection answer here..." rows="4"></textarea>
-                    <div class="button-row">
-                        <button class="btn btn-success" id="setAnswerBtn">
-                            <i class="fas fa-check"></i> Complete Connection
-                        </button>
-                        <input type="file" id="answerFileInput" accept=".txt" hidden>
-                        <button class="btn btn-outline" onclick="document.getElementById('answerFileInput').click()">
-                            <i class="fas fa-upload"></i> Upload Answer File
-                        </button>
                     </div>
                 </div>
             </div>
